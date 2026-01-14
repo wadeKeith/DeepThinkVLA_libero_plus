@@ -1,0 +1,17 @@
+nohup.out
+__pycache__
+google
+checkpoints
+wandb
+data/datasets
+physical-intelligence/
+*.log
+*.npy
+libero/datasets
+libero/libero/assets
+rollouts/
+logs/
+logs_mask_cot/
+logs_mask_cot_random/
+logs_robotwin/
+eval_robotwin_result/
