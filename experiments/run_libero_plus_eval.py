@@ -34,7 +34,7 @@ from experiments.libero_utils import (
     quat2axisangle,
     save_rollout_video,
 )
-from experiments.openpi_fast_oft_utils import (
+from experiments.deepthinkvla_utils import (
     resize_image_for_policy,
     get_vla,
     get_vla_action,
@@ -84,7 +84,7 @@ class GenerateConfig:
     #################################################################################################################
     # Model-specific parameters
     #################################################################################################################
-    pretrained_checkpoint: Union[str, Path] = "physical-intelligence/sft_cot"     # Pretrained checkpoint path
+    pretrained_checkpoint: Union[str, Path] = "yinchenghust/sft_cot"     # Pretrained checkpoint path (or HF repo id)
 
     num_images_in_input: int = 2                # Number of images in input context
 
@@ -99,7 +99,6 @@ class GenerateConfig:
     #################################################################################################################
     task_suite_name: str = TaskSuite.LIBERO_OBJECT     # Task suite
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
-    num_trials_per_task: int = 1                    # Number of rollouts per task
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
     env_img_res: int = 256                           # Resolution for environment images (not policy input resolution)
 
@@ -109,15 +108,13 @@ class GenerateConfig:
     run_id_note: Optional[str] = None                # Extra note to add to end of run ID for logging
     local_log_dir: str = "./experiments/logs"        # logs_mask_cot, logs_mask_cot_random, logs
 
-    project_name: str = "openpi_fast_oft"                    # Name of project to log to (use default!)
-    swanlab_api_key: Optional[str] = "5WXb6nm31cT5JlXCRyAcG"
+    project_name: str = "deepthinkvla"                 # Name of project to log to
+    swanlab_api_key: Optional[str] = None              # Prefer env var; keep None for open-source safety
     swanlab_mode: str = 'disabled'                      # cloud-only, local, disabled
 
     seed: int = 429                                    # Random Seed (for reproducibility)
 
     panel_width_px: int = 812                         # Width of side panel for displaying CoT text
-
-    scale_down_value: float = 2.0                           # Scale down factor for testing generalization
 
     # fmt: on
 
@@ -149,7 +146,7 @@ def validate_config(cfg: GenerateConfig) -> None:
 def setup_logging(cfg: GenerateConfig):
     """Set up logging to file and optionally to wandb."""
     # Create run ID
-    run_id = f"EVAL-{cfg.task_suite_name}-openpi_fast_oft-{DATE_TIME}"
+    run_id = f"EVAL-{cfg.task_suite_name}-deepthinkvla-{DATE_TIME}"
     if cfg.run_id_note is not None:
         run_id += f"--{cfg.run_id_note}"
 
@@ -159,14 +156,18 @@ def setup_logging(cfg: GenerateConfig):
     log_file = open(local_log_filepath, "w")
     logger.info(f"Logging to local log file: {local_log_filepath}")
 
-    # Initialize Weights & Biases logging if enabled
-    swanlab.login(cfg.swanlab_api_key)  # NOTE: previous login information will be overwritten
-    swanlab.init(
-        project=cfg.project_name,
-        experiment_name=run_id,
-        logdir=cfg.local_log_dir,
-        mode=cfg.swanlab_mode,
-    )
+    # Initialize SwanLab logging if enabled
+    if cfg.swanlab_mode != "disabled":
+        # Prefer environment variable; fall back to cfg
+        api_key = os.environ.get("SWANLAB_API_KEY", None) or cfg.swanlab_api_key
+        if api_key:
+            swanlab.login(api_key)  # NOTE: previous login information will be overwritten
+        swanlab.init(
+            project=cfg.project_name,
+            experiment_name=run_id,
+            logdir=cfg.local_log_dir,
+            mode=cfg.swanlab_mode,
+        )
 
     return log_file, local_log_filepath, run_id
 
@@ -244,7 +245,7 @@ def run_episode(
     t = 0
     replay_images = []
     cot_replay = []
-    max_steps = TASK_MAX_STEPS[cfg.task_suite_name] * cfg.scale_down_value
+    max_steps = TASK_MAX_STEPS[cfg.task_suite_name]
 
     # Run episode
     success = False
@@ -305,8 +306,6 @@ def run_task(
     unomrmalize_action,
     resize_size,
     processor=None,
-    total_episodes=0,
-    total_successes=0,
     log_file=None,
 ):
     """Run evaluation for a single task."""
@@ -317,79 +316,39 @@ def run_task(
     initial_states, all_initial_states = load_initial_states(cfg, task_suite, task_id, log_file)
 
     # Initialize environment and get task description
-    env, task_description = get_libero_env(task, resolution=cfg.env_img_res, scale_down_value=cfg.scale_down_value)
+    env, task_description = get_libero_env(task, resolution=cfg.env_img_res)
 
-    # Start episodes
-    task_episodes, task_successes = 0, 0
-    for episode_idx in tqdm.tqdm(range(cfg.num_trials_per_task)):
-        # episode_idx = 36
-        log_message(f"\nTask: {task_description}", log_file)
+    log_message(f"\nTask: {task_description}", log_file)
 
-        # Handle initial state
-        if cfg.initial_states_path == "DEFAULT":
-            # Use default initial state
-            initial_state = initial_states[episode_idx]
-        else:
-            # Get keys for fetching initial episode state from JSON
-            initial_states_task_key = task_description.replace(" ", "_")
-            episode_key = f"demo_{episode_idx}"
+    # Handle initial state
+    if cfg.initial_states_path == "DEFAULT":
+        # Use default initial state
+        initial_state = initial_states[0]
+    else:
+        raise('now is not supported')
 
-            # Skip episode if expert demonstration failed to complete the task
-            if not all_initial_states[initial_states_task_key][episode_key]["success"]:
-                log_message(f"Skipping task {task_id} episode {episode_idx} due to failed expert demo!", log_file)
-                continue
-
-            # Get initial state
-            initial_state = np.array(all_initial_states[initial_states_task_key][episode_key]["initial_state"])
-
-        log_message(f"Starting episode {task_episodes + 1}...", log_file)
-
-        # Run episode
-        success, replay_images = run_episode(
-            cfg,
-            env,
-            task_description,
-            model,
-            unomrmalize_action,
-            resize_size,
-            processor,
-            initial_state,
-            log_file,
-        )
-
-        # Update counters
-        task_episodes += 1
-        total_episodes += 1
-        if success:
-            task_successes += 1
-            total_successes += 1
-
-        # Save replay video
-        save_rollout_video(
-            replay_images, total_episodes, success=success, task_description=task_description, log_file=log_file
-        )
-
-        # Log results
-        log_message(f"Success: {success}", log_file)
-        log_message(f"# episodes completed so far: {total_episodes}", log_file)
-        log_message(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)", log_file)
-
-    # Log task results
-    task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0
-    total_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
-
-    log_message(f"Current task success rate: {task_success_rate}", log_file)
-    log_message(f"Current total success rate: {total_success_rate}", log_file)
-
-
-    swanlab.log(
-        {
-            f"success_rate/{task_description}": task_success_rate,
-            f"num_episodes/{task_description}": task_episodes,
-        }
+    # Run episode
+    success, replay_images = run_episode(
+        cfg,
+        env,
+        task_description,
+        model,
+        unomrmalize_action,
+        resize_size,
+        processor,
+        initial_state,
+        log_file,
     )
 
-    return total_episodes, total_successes
+    # Save replay video
+    save_rollout_video(
+        replay_images, success=success, task_description=task_description, log_file=log_file
+    )
+
+    # Log results
+    log_message(f"Success: {success}", log_file)
+
+    return success
 
 
 @draccus.wrap()
@@ -400,6 +359,9 @@ def eval_libero(cfg: GenerateConfig) -> float:
 
     # Set random seed
     set_seed_everywhere(cfg.seed)
+
+    with open("name_to_category.json", "r") as f:
+        name_to_category =  json.load(f)
 
     ##########################################################################################
     # Initialize model and components
@@ -420,10 +382,28 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Task suite: {cfg.task_suite_name}", log_file)
 
     # Start evaluation
-    total_episodes, total_successes = 0, 0
+    result_success_dict = {
+        'Objects Layout': 0,
+        'Language Instructions': 0,
+        'Light Conditions': 0,
+        'Camera Viewpoints': 0,
+        'Robot Initial States' : 0,
+        'Background Textures': 0,
+        'Sensor Noise': 0,
+    }
+    result_fail_dict = {
+        'Objects Layout': 0,
+        'Language Instructions': 0,
+        'Light Conditions': 0,
+        'Camera Viewpoints': 0,
+        'Robot Initial States' : 0,
+        'Background Textures': 0,
+        'Sensor Noise': 0,
+    }
+    total_successes = 0
     for task_id in tqdm.tqdm(range(num_tasks)):
         # task_id = 0
-        total_episodes, total_successes = run_task(
+        success = run_task(
             cfg,
             task_suite,
             task_id,
@@ -431,29 +411,27 @@ def eval_libero(cfg: GenerateConfig) -> float:
             unomrmalize_action,
             cfg.img_resize_size,
             processor,
-            total_episodes,
-            total_successes,
             log_file,
         )
+        result_success_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if success else 0
+        result_fail_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if not success else 0
+        if success:
+            total_successes += 1
 
     # Calculate final success rate
-    final_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
+    final_success_rate = float(total_successes) / float(num_tasks)
 
     # Log final results
     log_message("Final results:", log_file)
-    log_message(f"Total episodes: {total_episodes}", log_file)
+    log_message(f"Total episodes: {num_tasks}", log_file)
     log_message(f"Total successes: {total_successes}", log_file)
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
-
-    swanlab.log(
-        {
-            "success_rate/total": final_success_rate,
-            "num_episodes/total": total_episodes,
-        }
-    )
-
     # Close log file
+    with open(cfg.task_suite_name.lower()+'_success_outcome.json', "w") as f:
+        json.dump(result_success_dict, f, indent=4)
+    with open(cfg.task_suite_name.lower()+'_fail_outcome.json', "w") as f:
+        json.dump(result_fail_dict, f, indent=4)
     if log_file:
         log_file.close()
 

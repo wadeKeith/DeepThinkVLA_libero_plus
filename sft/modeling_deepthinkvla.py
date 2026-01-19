@@ -76,7 +76,7 @@ def get_actions_mask_cot(labels, action_token_begin_idx, action_token_end_idx, i
     return mask * action_tokens_only_mask
 
 
-class OpenpiFastOft(PaliGemmaForConditionalGeneration):
+class DeepThinkVLA(PaliGemmaForConditionalGeneration):
     def __init__(self, config: PaliGemmaConfig):
         super().__init__(config)
         self.bins = np.linspace(-1, 1, 2048)

@@ -30,3 +30,6 @@ bddl
 easydict
 cloudpickle
 gym
+usd-core
+wand
+scikit-image

@@ -1,4 +1,4 @@
-"""Utils for evaluating OpenVLA or fine-tuned OpenVLA policies."""
+"""Utils for evaluating DeepThinkVLA or fine-tuned VLA policies."""
 
 import json
 import os
@@ -11,14 +11,14 @@ from PIL import Image, ImageDraw, ImageFont
 import textwrap
 from transformers import GenerationConfig
 from torchvision import transforms
-from sft.modeling_openpi_fast_oft import OpenpiFastOft
+from sft.modeling_deepthinkvla import DeepThinkVLA
 from data.normalize import Unnormalize_Action
 from sft.constants import ACTION_PROPRIO_NORMALIZATION_TYPE, ACTION_MASK, NUM_ACTIONS_CHUNK, ACTION_DIM
 
 # Initialize important constants
 THINK_PREFIX = "First output the thinking process in <think></think> tags and then output the final action in <action></action>."
-DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-OPENPI_IMAGE_SIZE = 224  # Standard image size expected by OpenVLA
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+IMAGE_SIZE = 224  # Standard image size expected by the model
 
 # Configure NumPy print settings
 np.set_printoptions(formatter={"float": lambda x: "{0:0.3f}".format(x)})
@@ -124,7 +124,7 @@ def get_vla(cfg) -> torch.nn.Module:
     """
 
     # Load the model
-    vla = OpenpiFastOft.from_pretrained(
+    vla = DeepThinkVLA.from_pretrained(
         cfg.pretrained_checkpoint,
         torch_dtype=getattr(torch, cfg.compute_dtype),
         attn_implementation = 'sdpa',
@@ -197,8 +197,8 @@ def prepare_image_for_vla(image: np.ndarray) -> Image.Image:
     check_image_format(image)
 
     # Resize if needed
-    if image.shape != (OPENPI_IMAGE_SIZE, OPENPI_IMAGE_SIZE, 3):
-        image = resize_image_for_policy(image, OPENPI_IMAGE_SIZE)
+    if image.shape != (IMAGE_SIZE, IMAGE_SIZE, 3):
+        image = resize_image_for_policy(image, IMAGE_SIZE)
 
     # Convert to PIL image
     pil_image = Image.fromarray(image).convert("RGB")
